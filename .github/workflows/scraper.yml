@@ -1,36 +1,50 @@
-name: Weekly Scraper
+name: Weekly Automation Pipeline
 
 on:
   schedule:
-    - cron: '30 4 * * 1'
-  workflow_dispatch:
+    # Runs every Monday at 04:00 UTC
+    # Adjust if needed
+    - cron: "0 4 * * 1"
 
-permissions:
-  contents: write
+  workflow_dispatch:   # Allows manual run from GitHub UI
 
 jobs:
-  run-scraper:
+  run-pipeline:
     runs-on: ubuntu-latest
 
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      MODEL: ${{ secrets.MODEL }}
+      OPENROUTER_URL: ${{ secrets.OPENROUTER_URL }}
+
     steps:
-      - name: Checkout
+
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Run script
-        run: python test.py
-
-      - name: Commit checkpoint and output
+      - name: Install Dependencies
         run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "actions@github.com"
-          git add checkpoint.json output.txt
-          git commit -m "Update checkpoint and data" || echo "No changes"
-          git push
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Chrome (for Selenium)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+
+      - name: Run Stage 1
+        run: |
+          python stage1.py
+
+      - name: Run Stage 2
+        run: |
+          python stage2.py
+
+      - name: Run Stage 3
+        run: |
+          python stage3.py
