@@ -1,2 +1,5 @@
+pandas
+python-dateutil
 requests
 beautifulsoup4
+pathlib
