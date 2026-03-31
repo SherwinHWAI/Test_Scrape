@@ -70,5 +70,7 @@ jobs:
           git config --global user.email "github-actions@github.com"
 
           git add OUTPUT_STAGE1/ OUTPUT_STAGE2/ OUTPUT_STAGE3/
-          git commit -m "Update pipeline outputs" || echo "No changes to commit"
+          
+          # git commit -m "Update pipeline outputs" || echo "No changes to commit"
+          git diff --staged --quiet || git commit -m "Update pipeline outputs"
           git push
