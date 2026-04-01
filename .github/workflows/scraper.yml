@@ -2,7 +2,7 @@ name: Weekly Automation Pipeline
 
 on:
   schedule:
-    - cron: "0 21 * * 5"
+    - cron: "0 21 * * 5"   # Every Friday at 21:00 UTC
   workflow_dispatch:
 
 permissions:
@@ -10,7 +10,6 @@ permissions:
 
 jobs:
   run-pipeline:
-    # runs-on: ubuntu-latest
     runs-on: self-hosted
 
     env:
@@ -24,36 +23,19 @@ jobs:
         with:
           fetch-depth: 0
 
-      # - name: Set up Python
-      #   uses: actions/setup-python@v5
-      #   with:
-      #     python-version: "3.14"
+      # Ensure Python exists (safe fallback)
+      - name: Check Python
+        run: |
+          python --version || echo "Python not found! Make sure it's installed on the runner."
 
+      # Install dependencies (only if requirements.txt exists)
       # - name: Install Dependencies
       #   run: |
-      #     # python -m pip install --upgrade pip
-      #     pip install -r requirements.txt
-
-      # - name: Install Google Chrome
-      #   run: |
-      #     sudo apt-get update
-      #     sudo apt-get install -y wget curl unzip gnupg
-      #     wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
-      #     sudo sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list'
-      #     sudo apt-get update
-      #     sudo apt-get install -y google-chrome-stable
-      #     google-chrome --version
-
-      # - name: Install matching ChromeDriver
-      #   run: |
-      #     CHROME_VERSION=$(google-chrome --product-version)
-      #     CHROME_MAJOR=$(echo "$CHROME_VERSION" | cut -d'.' -f1)
-      #     DRIVER_VERSION=$(curl -s "https://googlechromelabs.github.io/chrome-for-testing/LATEST_RELEASE_$CHROME_MAJOR")
-      #     wget -O /tmp/chromedriver.zip "https://storage.googleapis.com/chrome-for-testing-public/$DRIVER_VERSION/linux64/chromedriver-linux64.zip"
-      #     unzip -o /tmp/chromedriver.zip -d /tmp/
-      #     sudo mv /tmp/chromedriver-linux64/chromedriver /usr/local/bin/chromedriver
-      #     sudo chmod +x /usr/local/bin/chromedriver
-      #     chromedriver --version
+      #     if [ -f requirements.txt ]; then
+      #       pip install -r requirements.txt
+      #     else
+      #       echo "No requirements.txt found, skipping install."
+      #     fi
 
       - name: Run Stage 1
         run: python stage1_code.py
@@ -69,8 +51,18 @@ jobs:
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@github.com"
 
-          git add OUTPUT_STAGE1/ OUTPUT_STAGE2/ OUTPUT_STAGE3/
-          
-          $changes = git status --porcelain
-          if ($changes) {git commit -m "Update pipeline outputs"}
-          git push
+          git add OUTPUT_STAGE1/ OUTPUT_STAGE2/ OUTPUT_STAGE3/ || true
+
+          changes=$(git status --porcelain)
+
+          if [ -n "$changes" ]; then
+            echo "Changes detected. Committing..."
+            git commit -m "Update pipeline outputs"
+
+            # Pull latest changes to avoid conflicts
+            git pull --rebase
+
+            git push
+          else
+            echo "No changes to commit."
+          fi
