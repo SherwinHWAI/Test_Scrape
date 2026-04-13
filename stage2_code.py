@@ -101,7 +101,6 @@ KEEP_PATTERNS = [
 
 KEEP_RE = re.compile("|".join(KEEP_PATTERNS), flags=re.IGNORECASE)
 
-
 # ============================
 # 2) EXCLUDE (Noise titles)
 # Only applied if KEEP didn't match.
