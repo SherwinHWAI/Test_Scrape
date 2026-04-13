@@ -2,7 +2,7 @@ name: Weekly Automation Pipeline
 
 on:
   schedule:
-    - cron: "40 19 * * *"
+    - cron: "0 21 * * 5"
   workflow_dispatch:
 
 permissions:
@@ -24,19 +24,19 @@ jobs:
           fetch-depth: 0
 
       - name: Check Python
-        run: C:\Users\data.science\AppData\Local\Programs\Python\Python314\python.exe --version
+        run: python --version
 
       - name: Install Dependencies
-        run: C:\Users\data.science\AppData\Local\Programs\Python\Python314\python.exe -m pip install -r requirements.txt
+        run: pip install -r requirements.txt
 
       - name: Run Stage 1
-        run: C:\Users\data.science\AppData\Local\Programs\Python\Python314\python.exe stage1_code.py
+        run: python stage1_code.py
 
       - name: Run Stage 2
-        run: C:\Users\data.science\AppData\Local\Programs\Python\Python314\python.exe stage2_code.py
+        run: python stage2_code.py
 
       - name: Run Stage 3
-        run: C:\Users\data.science\AppData\Local\Programs\Python\Python314\python.exe stage3_code.py
+        run: python stage3_code.py
 
       - name: Commit and Push Outputs
         run: |
