@@ -635,7 +635,7 @@ def main():
                         section_stats[key]["page_errors"] += 1
                         print(f"  [finance page error] {used_url} -> {err}")
                         break
-                    print(f"  [debug] parsed items on page {page} = {len(items)}")
+                    # print(f"  [debug] parsed items on page {page} = {len(items)}")
                     section_stats[key]["pages"] += 1
                     soup = BeautifulSoup(html, "html.parser")
 
