@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """
 STAGE 1 — INCREMENTAL + MERGED + DELTA
-HYBRID VERSION:
-- Becker Payer sections -> requests
-- Becker Hospital Review finance -> Selenium
+FULL SELENIUM VERSION:
+- ALL sections (Becker Payer + Becker Hospital Review) -> Selenium
+- requests retained only for article-date fallback lookups
 
 What this version does:
 1. Reads previous Stage-1 merged CSV
 2. Uses latest published_dt in merged CSV as watermark
-3. Crawls section pages incrementally
+3. Crawls section pages incrementally using Selenium for all sections
 4. Dedupes merged rows by:
       (normalized_title + published_date_YYYYMMDD)
 5. If same article appears in multiple sections,
@@ -23,7 +23,7 @@ What this version does:
 Important behavior:
 - Each scheduled run reads the same merged CSV,
   gets the latest published date, and fetches only newer rows.
-- Finance archive is fetched with Selenium because requests gets blocked.
+- All sections now use Selenium to bypass anti-bot blocking (HTTP 403).
 """
 
 from __future__ import annotations
@@ -43,6 +43,7 @@ from dateutil import parser as date_parser
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -60,7 +61,7 @@ BASE_SECTIONS = [
     ("https://www.beckershospitalreview.com/finance/", "Beckers Hospital Review", "finance"),
 ]
 
-USE_SELENIUM_FOR_FINANCE = True
+USE_SELENIUM_FOR_ALL = True
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -109,14 +110,15 @@ class Listing:
 
 
 # ============================
-# SESSION
+# SESSION (used for article-date fallback only)
 # ============================
 session = requests.Session()
 session.headers.update(HEADERS)
 
 
-from selenium.webdriver.chrome.service import Service
-
+# ============================
+# SELENIUM DRIVER
+# ============================
 def make_driver():
     options = Options()
     options.add_argument("--headless=new")
@@ -153,7 +155,9 @@ def make_driver():
     )
     return driver
 
+
 def warm_up_session():
+    """Warm up the requests session (used for article-date fallback)."""
     warm_urls = [
         "https://www.beckerspayer.com/",
         "https://www.beckerspayer.com/payer/",
@@ -165,6 +169,12 @@ def warm_up_session():
             time.sleep(2)
         except Exception:
             pass
+
+
+def get_domain_home(url: str) -> str:
+    """Return the homepage URL for the domain of a given URL."""
+    parsed = urlparse(url)
+    return f"{parsed.scheme}://{parsed.netloc}/"
 
 
 # ============================
@@ -194,8 +204,8 @@ def normalize_title(title: str) -> str:
     if not title:
         return ""
     t = title.strip().lower()
-    t = t.replace("â€˜", "'").replace("â€™", "'").replace("â€œ", '"').replace("â€�", '"')
-    t = t.replace("â€“", "-").replace("â€”", "-").replace("Â", " ")
+    t = t.replace("â€˜", "'").replace("â€™", "'").replace("â€œ", '"').replace("â€\x9d", '"')
+    t = t.replace("â€"", "-").replace("â€"", "-").replace("Â", " ")
     t = re.sub(r"\s+", " ", t).strip()
     return t
 
@@ -237,7 +247,7 @@ def parse_iso_any(dt_str: str) -> Optional[datetime]:
 
 
 # ============================
-# REQUESTS FETCH
+# REQUESTS FETCH (article-date fallback only)
 # ============================
 def fetch_html(url: str) -> Tuple[Optional[str], Optional[str]]:
     last_err = None
@@ -246,7 +256,6 @@ def fetch_html(url: str) -> Tuple[Optional[str], Optional[str]]:
             r = session.get(url, timeout=TIMEOUT, allow_redirects=True)
 
             if r.status_code == 200:
-                # safer decoding for GitHub/runtime differences
                 content_type = r.headers.get("Content-Type", "")
                 if "text" in content_type.lower() or "html" in content_type.lower():
                     try:
@@ -271,44 +280,21 @@ def fetch_html(url: str) -> Tuple[Optional[str], Optional[str]]:
     return None, last_err
 
 
-def fetch_page_candidates(base_url: str, page: int) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-    if page == 1:
-        candidates = [
-            base_url,
-            f"{base_url.rstrip('/')}/",
-            f"{base_url.rstrip('/')}/page/1/",
-        ]
-    else:
-        candidates = [
-            f"{base_url.rstrip('/')}/page/{page}/",
-        ]
-
-    seen = set()
-    candidates = [c for c in candidates if not (c in seen or seen.add(c))]
-
-    last_err = None
-    for candidate in candidates:
-        html, err = fetch_html(candidate)
-        if html:
-            return html, None, candidate
-        last_err = err
-
-    return None, last_err, candidates[-1] if candidates else None
-
-
 # ============================
-# SELENIUM FINANCE FETCH
+# SELENIUM FETCH (all sections)
 # ============================
-def fetch_finance_page_selenium(driver, page_url: str) -> Tuple[Optional[str], Optional[str]]:
+def fetch_page_selenium(driver, page_url: str) -> Tuple[Optional[str], Optional[str]]:
+    """Fetch a section listing page using Selenium. Works for all sections."""
     try:
-        # Warm up on main domain first
-        driver.get("https://www.beckershospitalreview.com/")
+        # Warm up on the section's own domain homepage first
+        domain_home = get_domain_home(page_url)
+        driver.get(domain_home)
         time.sleep(4)
 
-        # Then open finance page
+        # Navigate to the actual section page
         driver.get(page_url)
 
-        # Wait for likely article content, not just body
+        # Wait for article content to appear
         WebDriverWait(driver, 35).until(
             lambda d: (
                 len(d.find_elements(By.CSS_SELECTOR, "article.bh-card")) > 0
@@ -352,7 +338,9 @@ def fetch_finance_page_selenium(driver, page_url: str) -> Tuple[Optional[str], O
 
         return None, f"Selenium {type(e).__name__}: {e}"
 
-def fetch_finance_page_candidates_selenium(driver, base_url: str, page: int):
+
+def fetch_page_candidates_selenium(driver, base_url: str, page: int) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Try multiple URL candidates for a given page number using Selenium."""
     if page == 1:
         candidates = [
             base_url,
@@ -369,7 +357,7 @@ def fetch_finance_page_candidates_selenium(driver, base_url: str, page: int):
 
     last_err = None
     for candidate in candidates:
-        html, err = fetch_finance_page_selenium(driver, candidate)
+        html, err = fetch_page_selenium(driver, candidate)
         if html:
             return html, None, candidate
         last_err = err
@@ -587,13 +575,16 @@ def main():
 
     warm_up_session()
 
-    finance_driver = None
-    if USE_SELENIUM_FOR_FINANCE:
+    # Single Selenium driver for ALL sections
+    driver = None
+    if USE_SELENIUM_FOR_ALL:
         try:
-            finance_driver = make_driver()
-            print("[finance] Selenium driver started successfully")
+            driver = make_driver()
+            print("[selenium] Driver started successfully — will be used for all sections")
         except Exception as e:
-            print(f"[warn] Finance Selenium driver could not be started: {e}")
+            print(f"[warn] Selenium driver could not be started: {e}")
+            print("[warn] Pipeline cannot continue without Selenium — exiting.")
+            return
 
     delta_rows: List[Dict[str, str]] = []
     section_stats: Dict[str, Dict[str, int]] = {}
@@ -616,124 +607,21 @@ def main():
 
             print(f"\n[crawl] {key}")
 
-            # ============================
-            # FINANCE via Selenium
-            # ============================
-            if section == "finance" and USE_SELENIUM_FOR_FINANCE:
-                page = 1
-                stop_section = False
-
-                while not stop_section and page <= MAX_PAGES:
-                    if finance_driver is None:
-                        section_stats[key]["page_errors"] += 1
-                        print("  [finance error] Selenium driver unavailable")
-                        break
-
-                    html, err, used_url = fetch_finance_page_candidates_selenium(finance_driver, base_url, page)
-
-                    if not html:
-                        section_stats[key]["page_errors"] += 1
-                        print(f"  [finance page error] {used_url} -> {err}")
-                        break
-
-                    section_stats[key]["pages"] += 1
-                    soup = BeautifulSoup(html, "html.parser")
-
-                    items: List[Tuple[str, str, Optional[datetime]]] = []
-                    cards = extract_bhr_cards(soup)
-
-                    if cards:
-                        for c in cards:
-                            parsed = parse_bhr_card(c, base_url)
-                            if parsed:
-                                items.append(parsed)
-                    else:
-                        items.extend(parse_generic_listing(soup, base_url))
-                    print(f"  [debug-finance] parsed items on page {page} = {len(items)}")
-                    print("  [debug-finance-html-snippet]", repr(html[:500]))  
-                    if not items:
-                        break
-
-                    section_stats[key]["found"] += len(items)
-
-                    page_dates: List[date] = []
-                    page_all_have_dates = True
-                    resolved_items: List[Tuple[str, str, Optional[datetime]]] = []
-
-                    for title, url, pub in items:
-                        if pub is None:
-                            page_all_have_dates = False
-                            section_stats[key]["missing_date"] += 1
-
-                        if pub is not None:
-                            page_dates.append(pub.date())
-
-                        resolved_items.append((title, url, pub))
-
-                    if page_all_have_dates and page_dates:
-                        newest_on_page = max(page_dates)
-                        if newest_on_page < watermark:
-                            stop_section = True
-
-                    for title, url, pub in resolved_items:
-                        it = Listing(
-                            source=source,
-                            section=section,
-                            title=title,
-                            url=url,
-                            published_dt=pub.isoformat() if pub else None,
-                        )
-
-                        if pub is not None and pub.date() < watermark:
-                            section_stats[key]["skipped_old"] += 1
-                            add_to_merged(merged, it)
-                            continue
-
-                        if url in existing_urls:
-                            add_to_merged(merged, it)
-                            continue
-
-                        existing_urls.add(url)
-                        new_added_urls += 1
-                        add_to_merged(merged, it)
-
-                        delta_rows.append({
-                            "title": it.title,
-                            "published_dt": it.published_dt or "",
-                            "sources": it.source,
-                            "sections": it.section,
-                            "urls": it.url,
-                        })
-
-                        section_stats[key]["new_kept"] += 1
-                        new_kept_total += 1
-
-                    page += 1
-                    time.sleep(SLEEP_SEC)
-
-                s = section_stats[key]
-                print(
-                    f"  [section summary] pages={s['pages']} found={s['found']} new_kept={s['new_kept']} "
-                    f"skipped_old={s['skipped_old']} missing_date={s['missing_date']} "
-                    f"page_errors={s['page_errors']} article_date_errors={s['article_date_errors']}"
-                )
-                continue
-
-            # ============================
-            # NON-FINANCE via requests
-            # ============================
             page = 1
             stop_section = False
 
             while not stop_section and page <= MAX_PAGES:
-                html, err, used_url = fetch_page_candidates(base_url, page)
+                if driver is None:
+                    section_stats[key]["page_errors"] += 1
+                    print("  [error] Selenium driver unavailable — skipping section")
+                    break
+
+                html, err, used_url = fetch_page_candidates_selenium(driver, base_url, page)
 
                 if not html:
                     section_stats[key]["page_errors"] += 1
                     print(f"  [page error] {used_url} -> {err}")
                     break
-                print(f"  [debug] fetched {used_url} | html_len={len(html) if html else 0}")
-                print("  [debug-html-snippet]", repr(html[:500]))  
 
                 section_stats[key]["pages"] += 1
                 soup = BeautifulSoup(html, "html.parser")
@@ -748,7 +636,9 @@ def main():
                             items.append(parsed)
                 else:
                     items.extend(parse_generic_listing(soup, base_url))
+
                 print(f"  [debug] parsed items on page {page} = {len(items)}")
+
                 if not items:
                     break
 
@@ -760,13 +650,8 @@ def main():
 
                 for title, url, pub in items:
                     if pub is None:
-                        got, _ = extract_article_date(url)
-                        time.sleep(SLEEP_SEC)
-                        pub = got
-                        if pub is None:
-                            page_all_have_dates = False
-                            section_stats[key]["missing_date"] += 1
-                            section_stats[key]["article_date_errors"] += 1
+                        page_all_have_dates = False
+                        section_stats[key]["missing_date"] += 1
 
                     if pub is not None:
                         page_dates.append(pub.date())
@@ -822,9 +707,9 @@ def main():
             )
 
     finally:
-        if finance_driver is not None:
+        if driver is not None:
             try:
-                finance_driver.quit()
+                driver.quit()
             except Exception:
                 pass
 
