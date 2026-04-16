@@ -202,8 +202,8 @@ def normalize_title(title: str) -> str:
     if not title:
         return ""
     t = title.strip().lower()
-    t = t.replace("â€˜", "'").replace("â€™", "'").replace("â€œ", '"').replace("â€\x9d", '"')
-    t = t.replace("â€"", "-").replace("â€"", "-").replace("Â", " ")
+    t = t.replace("‘", "'").replace("’", "'").replace("“", '"').replace("”", '"')
+    t = t.replace("–", "-").replace("—", "-").replace("Â", " ")
     t = re.sub(r"\s+", " ", t).strip()
     return t
 
