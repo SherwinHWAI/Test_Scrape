@@ -134,7 +134,7 @@ def make_driver():
         "Chrome/146.0.0.0 Safari/537.36"
     )
 
-    service = Service(r"C:\Users\data.science\.cache\selenium\chromedriver\win64\147.0.7727.56\chromedriver.exe")
+    service = Service(r"C:\Users\SherwinMathias\.cache\selenium\chromedriver\win64\147.0.7727.56\chromedriver.exe")
     driver = webdriver.Chrome(service=service, options=options)
 
     driver.execute_cdp_cmd(
