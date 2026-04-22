@@ -96,7 +96,6 @@ SELENIUM_WAIT_SEC = 50
 # Used only if master file does not exist yet
 DEFAULT_CUTOFF_DATE = date(2022, 1, 1)
 
-
 # ============================
 # MODEL
 # ============================
