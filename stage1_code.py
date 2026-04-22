@@ -88,7 +88,13 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 OUT_CSV = str(OUT_DIR / "listings_2022tocurr_merged.csv")
 DELTA_CSV = str(OUT_DIR / "listings_2022tocurr_new_delta.csv")
 
-MAX_PAGES = 3000
+# MAX_PAGES is calculated dynamically in main() based on days since watermark.
+# This prevents Finance (and all sections) from scanning historical pages
+# during incremental daily/weekly runs. Override here only if needed.
+MAX_PAGES_FALLBACK = 3000   # used only on very first run (no existing CSV)
+PAGES_PER_DAY = 3           # pages to scan per day since last watermark
+MIN_PAGES = 5               # always scan at least this many pages
+MAX_PAGES_CAP = 50          # hard upper cap even for large gaps
 SLEEP_SEC = 4
 TIMEOUT = 45
 SELENIUM_WAIT_SEC = 50
@@ -159,13 +165,30 @@ def warm_up_session():
     """Warm up the requests session (used for article-date fallback)."""
     warm_urls = [
         "https://www.beckerspayer.com/",
-        "https://www.beckerspayer.com/payer/",
         "https://www.beckershospitalreview.com/",
     ]
     for u in warm_urls:
         try:
             session.get(u, timeout=TIMEOUT)
             time.sleep(2)
+        except Exception:
+            pass
+
+
+def warm_up_selenium(driver):
+    """
+    Warm up the Selenium driver once at session start.
+    Visit each domain homepage once only. This avoids the anti-bot pattern
+    of visiting the homepage before every single page request.
+    """
+    warm_urls = [
+        "https://www.beckerspayer.com/",
+        "https://www.beckershospitalreview.com/",
+    ]
+    for u in warm_urls:
+        try:
+            driver.get(u)
+            time.sleep(3)
         except Exception:
             pass
 
@@ -283,12 +306,8 @@ def fetch_html(url: str) -> Tuple[Optional[str], Optional[str]]:
 def fetch_page_selenium(driver, page_url: str) -> Tuple[Optional[str], Optional[str]]:
     """Fetch a section listing page using Selenium. Works for all sections."""
     try:
-        # Warm up on the section's own domain homepage first
-        domain_home = get_domain_home(page_url)
-        driver.get(domain_home)
-        time.sleep(4)
-
-        # Navigate to the actual section page
+        # Navigate directly to the section page.
+        # Domain warm-up is done once at session start (warm_up_selenium).
         driver.get(page_url)
 
         # Wait for article content to appear
@@ -570,6 +589,16 @@ def main():
 
     merged = load_existing_merged_rows(OUT_CSV)
 
+    # Calculate dynamic MAX_PAGES based on days since watermark
+    if watermark and watermark != DEFAULT_CUTOFF_DATE:
+        days_gap = (date.today() - watermark).days
+        days_gap = max(days_gap, 1)  # always at least 1 day
+        MAX_PAGES = min(MAX_PAGES_CAP, max(MIN_PAGES, days_gap * PAGES_PER_DAY))
+        print(f"[config] Days since watermark: {days_gap} -> MAX_PAGES per section = {MAX_PAGES}")
+    else:
+        MAX_PAGES = MAX_PAGES_FALLBACK
+        print(f"[config] No watermark found (first run) -> MAX_PAGES = {MAX_PAGES}")
+
     warm_up_session()
 
     # Single Selenium driver for ALL sections
@@ -577,7 +606,8 @@ def main():
     if USE_SELENIUM_FOR_ALL:
         try:
             driver = make_driver()
-            print("[selenium] Driver started successfully — will be used for all sections")
+            warm_up_selenium(driver)
+            print("[selenium] Driver started successfully - will be used for all sections")
         except Exception as e:
             print(f"[warn] Selenium driver could not be started: {e}")
             print("[warn] Pipeline cannot continue without Selenium — exiting.")
