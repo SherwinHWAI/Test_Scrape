@@ -2,7 +2,7 @@ name: Weekly Automation Pipeline
 
 on:
   schedule:
-    - cron: "30 12 * * *"
+    - cron: "10 14 * * *"
   workflow_dispatch:
 
 permissions:
